@@ -70,35 +70,6 @@ impl ArithmeticDecoder {
         Ok(())
     }
 
-    pub(crate) fn read_bool(&mut self, probability: u8) -> bool {
-        self.cold_read_bool(probability)
-    }
-
-    pub(crate) fn read_flag(&mut self) -> bool {
-        self.cold_read_flag()
-    }
-
-    pub(crate) fn read_literal(&mut self, n: u8) -> u8 {
-        self.cold_read_literal(n)
-    }
-
-    pub(crate) fn read_optional_signed_value(&mut self, n: u8) -> i32 {
-        self.cold_read_optional_signed_value(n)
-    }
-
-    pub(crate) fn read_with_tree<const N: usize>(&mut self, tree: &[TreeNode; N]) -> i8 {
-        let first_node = tree[0];
-        self.read_with_tree_with_first_node(tree, first_node)
-    }
-
-    pub(crate) fn read_with_tree_with_first_node(
-        &mut self,
-        tree: &[TreeNode],
-        first_node: TreeNode,
-    ) -> i8 {
-        self.cold_read_with_tree(tree, usize::from(first_node.index))
-    }
-
     const FINAL_BYTES_REMAINING_EOF: i8 = -0xE;
 
     fn load_from_final_bytes(&mut self) {
@@ -124,7 +95,7 @@ impl ArithmeticDecoder {
         }
     }
 
-    fn cold_read_bit(&mut self, probability: u8) -> bool {
+    fn read_bit(&mut self, probability: u8) -> bool {
         if self.state.bit_count < 0 {
             if let Some(chunk) = self.chunks.get(self.state.chunk_index).copied() {
                 let v = u32::from_be_bytes(chunk);
@@ -165,32 +136,32 @@ impl ArithmeticDecoder {
         retval
     }
 
-    fn cold_read_bool(&mut self, probability: u8) -> bool {
-        self.cold_read_bit(probability)
+    pub(crate) fn read_bool(&mut self, probability: u8) -> bool {
+        self.read_bit(probability)
     }
 
-    fn cold_read_flag(&mut self) -> bool {
-        self.cold_read_bit(128)
+    pub(crate) fn read_flag(&mut self) -> bool {
+        self.read_bit(128)
     }
 
-    fn cold_read_literal(&mut self, n: u8) -> u8 {
+    pub(crate) fn read_literal(&mut self, n: u8) -> u8 {
         let mut v = 0u8;
 
         for _ in 0..n {
-            let b = self.cold_read_flag();
+            let b = self.read_flag();
             v = (v << 1) + u8::from(b);
         }
 
         v
     }
 
-    fn cold_read_optional_signed_value(&mut self, n: u8) -> i32 {
-        let flag = self.cold_read_flag();
+    pub(crate) fn read_optional_signed_value(&mut self, n: u8) -> i32 {
+        let flag = self.read_flag();
         if !flag {
             return 0;
         }
-        let magnitude = self.cold_read_literal(n);
-        let sign = self.cold_read_flag();
+        let magnitude = self.read_literal(n);
+        let sign = self.read_flag();
 
         if sign {
             -i32::from(magnitude)
@@ -199,13 +170,22 @@ impl ArithmeticDecoder {
         }
     }
 
-    fn cold_read_with_tree(&mut self, tree: &[TreeNode], start: usize) -> i8 {
+    pub(crate) fn read_with_tree<const N: usize>(&mut self, tree: &[TreeNode; N]) -> i8 {
+        self.read_with_tree_with_first_node(tree, tree[0])
+    }
+
+    pub(crate) fn read_with_tree_with_first_node(
+        &mut self,
+        tree: &[TreeNode],
+        first_node: TreeNode,
+    ) -> i8 {
+        let start = usize::from(first_node.index);
         let mut index = start;
 
         loop {
             let node = tree[index];
             let prob = node.prob;
-            let b = self.cold_read_bit(prob);
+            let b = self.read_bit(prob);
             let t = if b { node.right } else { node.left };
             let new_index = usize::from(t);
             if new_index < tree.len() {
