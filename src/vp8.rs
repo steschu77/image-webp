@@ -128,30 +128,13 @@ struct MacroBlock {
 /// A Representation of the last decoded video frame
 #[derive(Default, Debug, Clone)]
 pub struct Frame {
-    /// The width of the luma plane
     pub width: u16,
-
-    /// The height of the luma plane
     pub height: u16,
-
-    /// The luma plane of the frame
     pub ybuf: Vec<u8>,
-
-    /// The blue plane of the frame
     pub ubuf: Vec<u8>,
-
-    /// The red plane of the frame
     pub vbuf: Vec<u8>,
 
-    pub(crate) version: u8,
-
-    /// Indicates whether this frame is intended for display
     pub for_display: bool,
-
-    // Section 9.2
-    /// The pixel type of the frame as defined by Section 9.2
-    /// of the VP8 Specification
-    pub pixel_type: u8,
 
     // Section 9.4 and 15
     pub(crate) filter_type: bool, //if true uses simple filter // if false uses normal filter
@@ -457,19 +440,12 @@ impl<R: Read> Vp8Decoder<R> {
 
         let keyframe = tag & 1 == 0;
         if !keyframe {
-            return Err(DecodingError::UnsupportedFeature(
-                "Non-keyframe frames".to_owned(),
-            ));
+            return Err(Error::NonKeyframe);
         }
 
-        self.frame.version = ((tag >> 1) & 7) as u8;
         self.frame.for_display = (tag >> 4) & 1 != 0;
 
         let first_partition_size = tag >> 5;
-
-        if !self.frame.keyframe {
-            return Err(Error::NonKeyframe);
-        }
 
         let mut tag = [0u8; 3];
         self.r.read_exact(&mut tag)?;
@@ -514,7 +490,7 @@ impl<R: Read> Vp8Decoder<R> {
 
         let mut res = self.b.start_accumulated_result();
         let color_space = self.b.read_literal(1).or_accumulate(&mut res);
-        self.frame.pixel_type = self.b.read_literal(1).or_accumulate(&mut res);
+        let _pixel_type = self.b.read_literal(1).or_accumulate(&mut res);
 
         if color_space != 0 {
             return Err(Error::ColorSpaceInvalid(color_space));
