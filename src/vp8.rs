@@ -14,7 +14,7 @@ use byteorder_lite::{LittleEndian, ReadBytesExt};
 use std::default::Default;
 use std::io::Read;
 
-use crate::decoder::{DecodingError, UpsamplingMethod};
+use crate::decoder::{Error, Result};
 use crate::vp8_common::*;
 use crate::vp8_prediction::*;
 use crate::yuv;
@@ -160,10 +160,6 @@ pub struct Frame {
 }
 
 impl Frame {
-    const fn chroma_width(&self) -> u16 {
-        self.width.div_ceil(2)
-    }
-
     const fn buffer_width(&self) -> u16 {
         let difference = self.width % 16;
         if difference > 0 {
@@ -174,64 +170,19 @@ impl Frame {
     }
 
     /// Fills an rgb buffer from the YUV buffers
-    pub(crate) fn fill_rgb(&self, buf: &mut [u8], upsampling_method: UpsamplingMethod) {
+    pub(crate) fn fill_rgb(&self, buf: &mut [u8]) {
         const BPP: usize = 3;
-
-        match upsampling_method {
-            UpsamplingMethod::Bilinear => {
-                yuv::fill_rgb_buffer_fancy::<BPP>(
-                    buf,
-                    &self.ybuf,
-                    &self.ubuf,
-                    &self.vbuf,
-                    usize::from(self.width),
-                    usize::from(self.height),
-                    usize::from(self.buffer_width()),
-                );
-            }
-            UpsamplingMethod::Simple => {
-                yuv::fill_rgb_buffer_simple::<BPP>(
-                    buf,
-                    &self.ybuf,
-                    &self.ubuf,
-                    &self.vbuf,
-                    usize::from(self.width),
-                    usize::from(self.chroma_width()),
-                    usize::from(self.buffer_width()),
-                );
-            }
-        }
+        yuv::fill_rgb_buffer_fancy::<BPP>(
+            buf,
+            &self.ybuf,
+            &self.ubuf,
+            &self.vbuf,
+            usize::from(self.width),
+            usize::from(self.height),
+            usize::from(self.buffer_width()),
+        );
     }
 
-    /// Fills an rgba buffer from the YUV buffers
-    pub(crate) fn fill_rgba(&self, buf: &mut [u8], upsampling_method: UpsamplingMethod) {
-        const BPP: usize = 4;
-
-        match upsampling_method {
-            UpsamplingMethod::Bilinear => {
-                yuv::fill_rgb_buffer_fancy::<BPP>(
-                    buf,
-                    &self.ybuf,
-                    &self.ubuf,
-                    &self.vbuf,
-                    usize::from(self.width),
-                    usize::from(self.height),
-                    usize::from(self.buffer_width()),
-                );
-            }
-            UpsamplingMethod::Simple => {
-                yuv::fill_rgb_buffer_simple::<BPP>(
-                    buf,
-                    &self.ybuf,
-                    &self.ubuf,
-                    &self.vbuf,
-                    usize::from(self.width),
-                    usize::from(self.chroma_width()),
-                    usize::from(self.buffer_width()),
-                );
-            }
-        }
-    }
     /// Gets the buffer size
     #[must_use]
     pub fn get_buf_size(&self) -> usize {
@@ -288,7 +239,7 @@ pub struct Vp8Decoder<R> {
 impl<R: Read> Vp8Decoder<R> {
     /// Create a new decoder.
     /// The reader must present a raw vp8 bitstream to the decoder
-    fn new(r: R) -> Self {
+    pub fn new(r: R) -> Self {
         let f = Frame::default();
         let s = Segment::default();
         let m = MacroBlock::default();
@@ -343,7 +294,7 @@ impl<R: Read> Vp8Decoder<R> {
         }
     }
 
-    fn update_token_probabilities(&mut self) -> Result<(), DecodingError> {
+    fn update_token_probabilities(&mut self) -> Result<()> {
         let mut res = self.b.start_accumulated_result();
         for (i, is) in COEFF_UPDATE_PROBS.iter().enumerate() {
             for (j, js) in is.iter().enumerate() {
@@ -360,7 +311,7 @@ impl<R: Read> Vp8Decoder<R> {
         self.b.check(res, ())
     }
 
-    fn init_partitions(&mut self, n: usize) -> Result<(), DecodingError> {
+    fn init_partitions(&mut self, n: usize) -> Result<()> {
         if n > 1 {
             let mut sizes = vec![0; 3 * n - 3];
             self.r.read_exact(sizes.as_mut_slice())?;
@@ -388,7 +339,7 @@ impl<R: Read> Vp8Decoder<R> {
         Ok(())
     }
 
-    fn read_quantization_indices(&mut self) -> Result<(), DecodingError> {
+    fn read_quantization_indices(&mut self) -> Result<()> {
         fn dc_quant(index: i32) -> i16 {
             DC_QUANT[index.clamp(0, 127) as usize]
         }
@@ -444,7 +395,7 @@ impl<R: Read> Vp8Decoder<R> {
         self.b.check(res, ())
     }
 
-    fn read_loop_filter_adjustments(&mut self) -> Result<(), DecodingError> {
+    fn read_loop_filter_adjustments(&mut self) -> Result<()> {
         let mut res = self.b.start_accumulated_result();
 
         if self.b.read_flag().or_accumulate(&mut res) {
@@ -460,7 +411,7 @@ impl<R: Read> Vp8Decoder<R> {
         self.b.check(res, ())
     }
 
-    fn read_segment_updates(&mut self) -> Result<(), DecodingError> {
+    fn read_segment_updates(&mut self) -> Result<()> {
         let mut res = self.b.start_accumulated_result();
 
         // Section 9.3
@@ -501,7 +452,7 @@ impl<R: Read> Vp8Decoder<R> {
         self.b.check(res, ())
     }
 
-    fn read_frame_header(&mut self) -> Result<(), DecodingError> {
+    fn read_frame_header(&mut self) -> Result<()> {
         let tag = self.r.read_u24::<LittleEndian>()?;
 
         let keyframe = tag & 1 == 0;
@@ -516,11 +467,15 @@ impl<R: Read> Vp8Decoder<R> {
 
         let first_partition_size = tag >> 5;
 
+        if !self.frame.keyframe {
+            return Err(Error::NonKeyframe);
+        }
+
         let mut tag = [0u8; 3];
         self.r.read_exact(&mut tag)?;
 
         if tag != [0x9d, 0x01, 0x2a] {
-            return Err(DecodingError::Vp8MagicInvalid(tag));
+            return Err(Error::Vp8MagicInvalid(tag));
         }
 
         let w = self.r.read_u16::<LittleEndian>()?;
@@ -533,18 +488,16 @@ impl<R: Read> Vp8Decoder<R> {
         self.mbheight = self.frame.height.div_ceil(16);
 
         self.top = vec![MacroBlock::default(); self.mbwidth.into()];
-        // Almost always the first macro block, except when non exists (i.e. `width == 0`)
         self.left = self.top.first().copied().unwrap_or_default();
 
-        self.frame.ybuf =
-            vec![0u8; usize::from(self.mbwidth) * 16 * usize::from(self.mbheight) * 16];
-        self.frame.ubuf = vec![0u8; usize::from(self.mbwidth) * 8 * usize::from(self.mbheight) * 8];
-        self.frame.vbuf = vec![0u8; usize::from(self.mbwidth) * 8 * usize::from(self.mbheight) * 8];
+        let mb_count = self.mbwidth as usize * self.mbheight as usize;
+        self.frame.ybuf = vec![0u8; mb_count * 16 * 16];
+        self.frame.ubuf = vec![0u8; mb_count * 8 * 8];
+        self.frame.vbuf = vec![0u8; mb_count * 8 * 8];
 
         self.top_border_y = vec![127u8; self.frame.width as usize + 4 + 16];
         self.left_border_y = vec![129u8; 1 + 16];
 
-        // 8 pixels per macroblock
         self.top_border_u = vec![127u8; 8 * self.mbwidth as usize];
         self.left_border_u = vec![129u8; 1 + 8];
 
@@ -564,7 +517,7 @@ impl<R: Read> Vp8Decoder<R> {
         self.frame.pixel_type = self.b.read_literal(1).or_accumulate(&mut res);
 
         if color_space != 0 {
-            return Err(DecodingError::ColorSpaceInvalid(color_space));
+            return Err(Error::ColorSpaceInvalid(color_space));
         }
 
         self.segments_enabled = self.b.read_flag().or_accumulate(&mut res);
@@ -605,7 +558,7 @@ impl<R: Read> Vp8Decoder<R> {
         Ok(())
     }
 
-    fn read_macroblock_header(&mut self, mbx: usize) -> Result<MacroBlock, DecodingError> {
+    fn read_macroblock_header(&mut self, mbx: usize) -> Result<MacroBlock> {
         let mut mb = MacroBlock::default();
         let mut res = self.b.start_accumulated_result();
 
@@ -622,8 +575,7 @@ impl<R: Read> Vp8Decoder<R> {
 
         // intra prediction
         let luma = (self.b.read_with_tree(&KEYFRAME_YMODE_NODES)).or_accumulate(&mut res);
-        mb.luma_mode =
-            LumaMode::from_i8(luma).ok_or(DecodingError::LumaPredictionModeInvalid(luma))?;
+        mb.luma_mode = LumaMode::from_i8(luma).ok_or(Error::LumaPredictionModeInvalid)?;
 
         match mb.luma_mode.into_intra() {
             // `LumaMode::B` - This is predicted individually
@@ -636,8 +588,8 @@ impl<R: Read> Vp8Decoder<R> {
                             &KEYFRAME_BPRED_MODE_NODES[top as usize][left as usize],
                         );
                         let intra = intra.or_accumulate(&mut res);
-                        let bmode = IntraMode::from_i8(intra)
-                            .ok_or(DecodingError::IntraPredictionModeInvalid(intra))?;
+                        let bmode =
+                            IntraMode::from_i8(intra).ok_or(Error::IntraPredictionModeInvalid)?;
                         mb.bpred[x + y * 4] = bmode;
 
                         self.top[mbx].bpred[12 + x] = bmode;
@@ -654,8 +606,7 @@ impl<R: Read> Vp8Decoder<R> {
         }
 
         let chroma = (self.b.read_with_tree(&KEYFRAME_UV_MODE_NODES)).or_accumulate(&mut res);
-        mb.chroma_mode = ChromaMode::from_i8(chroma)
-            .ok_or(DecodingError::ChromaPredictionModeInvalid(chroma))?;
+        mb.chroma_mode = ChromaMode::from_i8(chroma).ok_or(Error::ChromaPredictionModeInvalid)?;
 
         self.top[mbx].chroma_mode = mb.chroma_mode;
         self.top[mbx].luma_mode = mb.luma_mode;
@@ -784,7 +735,7 @@ impl<R: Read> Vp8Decoder<R> {
         complexity: usize,
         dcq: i16,
         acq: i16,
-    ) -> Result<bool, DecodingError> {
+    ) -> Result<bool> {
         // perform bounds checks once up front,
         // so that the compiler doesn't have to insert them in the hot loop below
         assert!(complexity <= 2);
@@ -870,7 +821,7 @@ impl<R: Read> Vp8Decoder<R> {
         mb: &mut MacroBlock,
         mbx: usize,
         p: usize,
-    ) -> Result<[i32; 384], DecodingError> {
+    ) -> Result<[i32; 384]> {
         let sindex = mb.segmentid as usize;
         let mut blocks = [0i32; 384];
         let mut plane = if mb.luma_mode == LumaMode::B {
@@ -1238,12 +1189,7 @@ impl<R: Read> Vp8Decoder<R> {
     }
 
     /// Decodes the current frame
-    pub fn decode_frame(r: R) -> Result<Frame, DecodingError> {
-        let decoder = Self::new(r);
-        decoder.decode_frame_()
-    }
-
-    fn decode_frame_(mut self) -> Result<Frame, DecodingError> {
+    pub fn decode_frame(mut self) -> Result<Frame> {
         self.read_frame_header()?;
 
         for mby in 0..self.mbheight as usize {

@@ -85,100 +85,35 @@ pub(crate) fn iwht4x4(block: &mut [i32]) {
     }
 }
 
-pub(crate) fn wht4x4(block: &mut [i32; 16]) {
-    // The intermediate results may overflow the types, so we stretch the type.
-    fn fetch(block: &[i32], idx: usize) -> i64 {
-        i64::from(block[idx])
-    }
-
-    // vertical
-    for i in 0..4 {
-        let a = fetch(block, i * 4) + fetch(block, i * 4 + 3);
-        let b = fetch(block, i * 4 + 1) + fetch(block, i * 4 + 2);
-        let c = fetch(block, i * 4 + 1) - fetch(block, i * 4 + 2);
-        let d = fetch(block, i * 4) - fetch(block, i * 4 + 3);
-
-        block[i * 4] = (a + b) as i32;
-        block[i * 4 + 1] = (c + d) as i32;
-        block[i * 4 + 2] = (a - b) as i32;
-        block[i * 4 + 3] = (d - c) as i32;
-    }
-
-    // horizontal
-    for i in 0..4 {
-        let a1 = fetch(block, i) + fetch(block, i + 12);
-        let b1 = fetch(block, i + 4) + fetch(block, i + 8);
-        let c1 = fetch(block, i + 4) - fetch(block, i + 8);
-        let d1 = fetch(block, i) - fetch(block, i + 12);
-
-        let a2 = a1 + b1;
-        let b2 = c1 + d1;
-        let c2 = a1 - b1;
-        let d2 = d1 - c1;
-
-        let a3 = (a2 + if a2 > 0 { 1 } else { 0 }) / 2;
-        let b3 = (b2 + if b2 > 0 { 1 } else { 0 }) / 2;
-        let c3 = (c2 + if c2 > 0 { 1 } else { 0 }) / 2;
-        let d3 = (d2 + if d2 > 0 { 1 } else { 0 }) / 2;
-
-        block[i] = a3 as i32;
-        block[i + 4] = b3 as i32;
-        block[i + 8] = c3 as i32;
-        block[i + 12] = d3 as i32;
-    }
-}
-
-pub(crate) fn dct4x4(block: &mut [i32; 16]) {
-    // The intermediate results may overflow the types, so we stretch the type.
-    fn fetch(block: &[i32], idx: usize) -> i64 {
-        i64::from(block[idx])
-    }
-
-    // vertical
-    for i in 0..4 {
-        let a = (fetch(block, i * 4) + fetch(block, i * 4 + 3)) * 8;
-        let b = (fetch(block, i * 4 + 1) + fetch(block, i * 4 + 2)) * 8;
-        let c = (fetch(block, i * 4 + 1) - fetch(block, i * 4 + 2)) * 8;
-        let d = (fetch(block, i * 4) - fetch(block, i * 4 + 3)) * 8;
-
-        block[i * 4] = (a + b) as i32;
-        block[i * 4 + 2] = (a - b) as i32;
-        block[i * 4 + 1] = ((c * 2217 + d * 5352 + 14500) >> 12) as i32;
-        block[i * 4 + 3] = ((d * 2217 - c * 5352 + 7500) >> 12) as i32;
-    }
-
-    // horizontal
-    for i in 0..4 {
-        let a = fetch(block, i) + fetch(block, i + 12);
-        let b = fetch(block, i + 4) + fetch(block, i + 8);
-        let c = fetch(block, i + 4) - fetch(block, i + 8);
-        let d = fetch(block, i) - fetch(block, i + 12);
-
-        block[i] = ((a + b + 7) >> 4) as i32;
-        block[i + 8] = ((a - b + 7) >> 4) as i32;
-        block[i + 4] = (((c * 2217 + d * 5352 + 12000) >> 16) + if d != 0 { 1 } else { 0 }) as i32;
-        block[i + 12] = ((d * 2217 - c * 5352 + 51000) >> 16) as i32;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_dct_inverse() {
+    fn test_inverse_dct() {
         const BLOCK: [i32; 16] = [
             38, 6, 210, 107, 42, 125, 185, 151, 241, 224, 125, 233, 227, 8, 57, 96,
         ];
+        const DCT: [i32; 16] = [
+            1037, -83, 97, 130, -104, -290, -280, 101, -289, 27, 89, 235, 202, 63, 69, -69,
+        ];
 
-        let mut dct_block = BLOCK.clone();
+        let mut block = DCT.clone();
+        idct4x4(&mut block);
+        assert_eq!(BLOCK, block);
+    }
 
-        dct4x4(&mut dct_block);
+    #[test]
+    fn test_inverse_wht() {
+        const BLOCK: [i32; 16] = [
+            39, 6, 210, 107, 42, 125, 185, 151, 241, 224, 125, 233, 227, 8, 57, 96,
+        ];
+        const WHT: [i32; 16] = [
+            1038, -126, 98, 88, -173, -315, -285, -1, -288, -64, 90, 228, 147, -39, -43, -43,
+        ];
 
-        let mut inverse_dct_block = dct_block.clone();
-
-        idct4x4(&mut inverse_dct_block);
-
-        assert_eq!(BLOCK, inverse_dct_block);
+        let mut block = WHT.clone();
+        iwht4x4(&mut block);
+        assert_eq!(BLOCK, block);
     }
 }
