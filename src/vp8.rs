@@ -303,20 +303,15 @@ impl<R: Read> Vp8Decoder<R> {
                     .read_u24::<LittleEndian>()
                     .expect("Reading from &[u8] can't fail and the chunk is complete");
 
-                let size = size as usize;
-                let mut buf = vec![[0; 4]; size.div_ceil(4)];
-                let bytes: &mut [u8] = buf.as_mut_slice().as_flattened_mut();
-                self.r.read_exact(&mut bytes[..size])?;
-                self.partitions[i].init(buf, size)?;
+                let mut buf = vec![0; size as usize];
+                self.r.read_exact(&mut buf[..])?;
+                self.partitions[i].init(&buf)?;
             }
         }
 
         let mut buf = Vec::new();
         self.r.read_to_end(&mut buf)?;
-        let size = buf.len();
-        let mut chunks = vec![[0; 4]; size.div_ceil(4)];
-        chunks.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&buf);
-        self.partitions[n - 1].init(chunks, size)?;
+        self.partitions[n - 1].init(&buf)?;
 
         Ok(())
     }
@@ -467,13 +462,11 @@ impl<R: Read> Vp8Decoder<R> {
         self.top_border_v = vec![127u8; 8 * self.mbwidth as usize];
         self.left_border_v = vec![129u8; 1 + 8];
 
-        let size = first_partition_size as usize;
-        let mut buf = vec![[0; 4]; size.div_ceil(4)];
-        let bytes: &mut [u8] = buf.as_mut_slice().as_flattened_mut();
-        self.r.read_exact(&mut bytes[..size])?;
+        let mut buf = vec![0; first_partition_size as usize];
+        self.r.read_exact(&mut buf[..])?;
 
         // initialise binary decoder
-        self.b.init(buf, size)?;
+        self.b.init(&buf)?;
 
         let color_space = self.b.read_literal(1);
         let _pixel_type = self.b.read_literal(1);
@@ -514,7 +507,12 @@ impl<R: Read> Vp8Decoder<R> {
         } else {
             None
         };
-        Ok(())
+
+        if self.b.is_overflow() {
+            Err(Error::BufferUnderrun)
+        } else {
+            Ok(())
+        }
     }
 
     fn read_macroblock_header(&mut self, mbx: usize) -> Result<MacroBlock> {
@@ -568,7 +566,11 @@ impl<R: Read> Vp8Decoder<R> {
         self.top[mbx].luma_mode = mb.luma_mode;
         self.top[mbx].bpred = mb.bpred;
 
-        Ok(mb)
+        if self.b.is_overflow() {
+            Err(Error::BufferUnderrun)
+        } else {
+            Ok(mb)
+        }
     }
 
     fn intra_predict_luma(&mut self, mbx: usize, mby: usize, mb: &MacroBlock, resdata: &[i32]) {
@@ -765,7 +767,11 @@ impl<R: Read> Vp8Decoder<R> {
             has_coefficients = true;
         }
 
-        Ok(has_coefficients)
+        if decoder.is_overflow() {
+            Err(Error::BufferUnderrun)
+        } else {
+            Ok(has_coefficients)
+        }
     }
 
     fn read_residual_data(

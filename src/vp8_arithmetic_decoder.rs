@@ -1,13 +1,12 @@
-use crate::decoder::{Error, Result};
+use crate::decoder::Result;
 
 use super::vp8::TreeNode;
 
 #[cfg_attr(test, derive(Debug))]
 pub(crate) struct ArithmeticDecoder {
-    chunks: Box<[[u8; 4]]>,
+    chunks: Vec<[u8; 4]>,
+    overflow: bool,
     state: State,
-    final_bytes: [u8; 3],
-    final_bytes_remaining: i8,
 }
 
 #[cfg_attr(test, derive(Debug))]
@@ -28,33 +27,17 @@ impl ArithmeticDecoder {
             bit_count: -8,
         };
         ArithmeticDecoder {
-            chunks: Box::new([]),
+            chunks: Vec::new(),
+            overflow: false,
             state,
-            final_bytes: [0; 3],
-            final_bytes_remaining: Self::FINAL_BYTES_REMAINING_EOF,
         }
     }
 
-    pub(crate) fn init(&mut self, mut buf: Vec<[u8; 4]>, len: usize) -> Result<()> {
-        let mut final_bytes = [0; 3];
-        let final_bytes_remaining = if len == 4 * buf.len() {
-            0
-        } else {
-            // Pop the last chunk (which is partial), then get length.
-            let Some(last_chunk) = buf.pop() else {
-                return Err(Error::NotEnoughInitData);
-            };
-            let len_rounded_down = 4 * buf.len();
-            let num_bytes_popped = len - len_rounded_down;
-            debug_assert!(num_bytes_popped <= 3);
-            final_bytes[..num_bytes_popped].copy_from_slice(&last_chunk[..num_bytes_popped]);
-            for i in num_bytes_popped..4 {
-                debug_assert_eq!(last_chunk[i], 0, "unexpected {last_chunk:?}");
-            }
-            num_bytes_popped as i8
-        };
+    pub(crate) fn init(&mut self, data: &[u8]) -> Result<()> {
+        let size = data.len();
+        let mut chunks = vec![[0; 4]; size.div_ceil(4)];
+        chunks.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&data);
 
-        let chunks = buf.into_boxed_slice();
         let state = State {
             chunk_index: 0,
             value: 0,
@@ -63,36 +46,14 @@ impl ArithmeticDecoder {
         };
         *self = Self {
             chunks,
+            overflow: false,
             state,
-            final_bytes,
-            final_bytes_remaining,
         };
         Ok(())
     }
 
-    const FINAL_BYTES_REMAINING_EOF: i8 = -0xE;
-
-    fn load_from_final_bytes(&mut self) {
-        match self.final_bytes_remaining {
-            1.. => {
-                self.final_bytes_remaining -= 1;
-                let byte = self.final_bytes[0];
-                self.final_bytes.rotate_left(1);
-                self.state.value <<= 8;
-                self.state.value |= u64::from(byte);
-                self.state.bit_count += 8;
-            }
-            0 => {
-                // libwebp seems to (sometimes?) allow bitstreams that read one byte past the end.
-                // This replicates that logic.
-                self.final_bytes_remaining -= 1;
-                self.state.value <<= 8;
-                self.state.bit_count += 8;
-            }
-            _ => {
-                self.final_bytes_remaining = Self::FINAL_BYTES_REMAINING_EOF;
-            }
-        }
+    pub(crate) fn is_overflow(&self) -> bool {
+        self.overflow
     }
 
     fn read_bit(&mut self, probability: u8) -> bool {
@@ -104,7 +65,8 @@ impl ArithmeticDecoder {
                 self.state.value |= u64::from(v);
                 self.state.bit_count += 32;
             } else {
-                self.load_from_final_bytes();
+                self.overflow = true;
+                return false;
             }
         }
         debug_assert!(self.state.bit_count >= 0);
@@ -206,10 +168,7 @@ mod tests {
     fn test_arithmetic_decoder_hello_short() {
         let mut decoder = ArithmeticDecoder::new();
         let data = b"hel";
-        let size = data.len();
-        let mut buf = vec![[0u8; 4]; 1];
-        buf.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&data[..]);
-        decoder.init(buf, size).unwrap();
+        decoder.init(&data[..]).unwrap();
         assert_eq!(false, decoder.read_flag());
         assert_eq!(true, decoder.read_bool(10));
         assert_eq!(false, decoder.read_bool(250));
@@ -223,10 +182,7 @@ mod tests {
     fn test_arithmetic_decoder_hello_long() {
         let mut decoder = ArithmeticDecoder::new();
         let data = b"hello world";
-        let size = data.len();
-        let mut buf = vec![[0u8; 4]; (size + 3) / 4];
-        buf.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&data[..]);
-        decoder.init(buf, size).unwrap();
+        decoder.init(&data[..]).unwrap();
         assert_eq!(false, decoder.read_flag());
         assert_eq!(true, decoder.read_bool(10));
         assert_eq!(false, decoder.read_bool(250));
