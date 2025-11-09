@@ -56,65 +56,85 @@ impl ArithmeticDecoder {
         self.overflow
     }
 
-    fn read_bit(&mut self, probability: u8) -> bool {
-        if self.state.bit_count < 0 {
-            if let Some(chunk) = self.chunks.get(self.state.chunk_index).copied() {
-                let v = u32::from_be_bytes(chunk);
-                self.state.chunk_index += 1;
-                self.state.value <<= 32;
-                self.state.value |= u64::from(v);
-                self.state.bit_count += 32;
-            } else {
-                self.overflow = true;
-                return false;
-            }
-        }
-        debug_assert!(self.state.bit_count >= 0);
-
-        let probability = u32::from(probability);
-        let split = 1 + (((self.state.range - 1) * probability) >> 8);
-        let bigsplit = u64::from(split) << self.state.bit_count;
-
-        let retval = if let Some(new_value) = self.state.value.checked_sub(bigsplit) {
-            self.state.range -= split;
-            self.state.value = new_value;
+    fn refill_bits(&mut self) -> bool {
+        if let Some(chunk) = self.chunks.get(self.state.chunk_index).copied() {
+            let v = u32::from_be_bytes(chunk);
+            self.state.chunk_index += 1;
+            self.state.value <<= 32;
+            self.state.value |= u64::from(v);
+            self.state.bit_count += 32;
             true
         } else {
-            self.state.range = split;
+            self.overflow = true;
             false
-        };
-        debug_assert!(self.state.range > 0);
+        }
+    }
 
-        // Compute shift required to satisfy `self.state.range >= 128`.
-        // Apply that shift to `self.state.range` and `self.state.bitcount`.
-        //
-        // Subtract 24 because we only care about leading zeros in the
-        // lowest byte of `self.state.range` which is a `u32`.
+    fn read_bit(&mut self, probability: u32) -> u8 {
+        if self.state.bit_count < 0 {
+            if !self.refill_bits() {
+                return 0u8;
+            }
+        }
+
+        let split = 1 + (((self.state.range - 1) * probability) >> 8);
+        let value_split = u64::from(split) << self.state.bit_count;
+        let value = self.state.value.checked_sub(value_split);
+
+        if let Some(value) = value {
+            self.state.range -= split;
+            self.state.value = value;
+        } else {
+            self.state.range = split;
+        }
+
         let shift = self.state.range.leading_zeros().saturating_sub(24);
         self.state.range <<= shift;
         self.state.bit_count -= shift as i32;
-        debug_assert!(self.state.range >= 128);
 
-        retval
+        u8::from(value.is_some())
+    }
+
+    pub(crate) fn read_signed(&mut self, abs_value: i32) -> i32 {
+        if self.state.bit_count < 0 {
+            if !self.refill_bits() {
+                return 0;
+            }
+        }
+
+        let split = 1 + (((self.state.range - 1) * 128) >> 8);
+        //let split = 1 + ((self.state.range - 1) >> 1);
+        let value_split = u64::from(split) << self.state.bit_count;
+        let value = self.state.value.checked_sub(value_split);
+
+        // let mask = ((value_split as i64).wrapping_sub(self.state.value as i64) >> 63) as i32;
+        //self.state.value = ((self.state.value as i64 - value_split as i64) & mask) as u64;
+
+        if let Some(value) = value {
+            self.state.range -= split;
+            self.state.value = value;
+        } else {
+            self.state.range = split;
+        }
+
+        //(abs_value ^ mask) - mask
+        if value.is_some() {
+            -abs_value
+        } else {
+            abs_value
+        }
     }
 
     pub(crate) fn read_bool(&mut self, probability: u8) -> bool {
-        self.read_bit(probability)
+        self.read_bit(probability as u32) != 0
     }
 
     pub(crate) fn read_flag(&mut self) -> bool {
-        self.read_bit(128)
+        self.read_bit(128) != 0
     }
 
     pub(crate) fn read_literal(&mut self, n: u8) -> u8 {
-        let mut v = 0u8;
-
-        for _ in 0..n {
-            let b = self.read_flag();
-            v = (v << 1) + u8::from(b);
-        }
-
-        v
+        (0..n).fold(0u8, |v, _| (v << 1) | self.read_bit(128))
     }
 
     pub(crate) fn read_optional_signed_value(&mut self, n: u8) -> i32 {
@@ -122,14 +142,8 @@ impl ArithmeticDecoder {
         if !flag {
             return 0;
         }
-        let magnitude = self.read_literal(n);
-        let sign = self.read_flag();
-
-        if sign {
-            -i32::from(magnitude)
-        } else {
-            i32::from(magnitude)
-        }
+        let magnitude = self.read_literal(n) as i32;
+        self.read_signed(magnitude)
     }
 
     pub(crate) fn read_with_tree<const N: usize>(&mut self, tree: &[TreeNode; N]) -> i8 {
@@ -146,9 +160,8 @@ impl ArithmeticDecoder {
 
         loop {
             let node = tree[index];
-            let prob = node.prob;
-            let b = self.read_bit(prob);
-            let t = if b { node.right } else { node.left };
+            let b = self.read_bit(node.prob as u32);
+            let t = if b != 0 { node.right } else { node.left };
             let new_index = usize::from(t);
             if new_index < tree.len() {
                 index = new_index;
@@ -176,6 +189,7 @@ mod tests {
         assert_eq!(5, decoder.read_literal(3));
         assert_eq!(64, decoder.read_literal(8));
         assert_eq!(185, decoder.read_literal(8));
+        assert!(!decoder.is_overflow());
     }
 
     #[test]
@@ -191,5 +205,13 @@ mod tests {
         assert_eq!(64, decoder.read_literal(8));
         assert_eq!(185, decoder.read_literal(8));
         assert_eq!(31, decoder.read_literal(8));
+        assert!(!decoder.is_overflow());
+    }
+
+    #[test]
+    fn test_arithmetic_decoder_uninit() {
+        let mut decoder = ArithmeticDecoder::new();
+        let _ = decoder.read_flag();
+        assert!(decoder.is_overflow());
     }
 }
