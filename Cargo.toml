@@ -24,3 +24,13 @@ webp = "0.3.0"
 
 [features]
 _benchmarks = []
+
+[profile.perf]
+inherits = "release"
+opt-level = 3
+debug = true           # generate full debug info (DWARF)
+debug-assertions = false
+overflow-checks = false
+lto = false             # leave off for easier symbol mapping
+codegen-units = 1       # better optimization consistency
+strip = "none"          # keep symbols

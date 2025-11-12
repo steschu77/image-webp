@@ -83,6 +83,23 @@ fn reference_test(file: &str) {
     assert_eq!(num_bytes_different, 0, "Pixel mismatch");
 }
 
+fn test_bench(file: &str) {
+    let start = std::time::Instant::now();
+
+    // Prepare WebP decoder
+    let contents = std::fs::read(format!("tests/images/{file}.webp")).unwrap();
+    let mut decoder = image_webp::WebPDecoder::new(contents).unwrap();
+    let (width, height) = decoder.dimensions();
+
+    // Decode WebP
+    let bytes_per_pixel = 3;
+    let mut data = vec![0; width as usize * height as usize * bytes_per_pixel];
+
+    std::iter::repeat(()).take(20).for_each(|_| decoder.read_image(&mut data).unwrap());
+
+    println!("{file} took: {:?}", start.elapsed());
+}
+
 macro_rules! reftest {
     ($basename:expr, $name:expr) => {
         paste::paste! {
@@ -98,4 +115,20 @@ macro_rules! reftest {
     }
 }
 
-reftest!(gallery1, 1, 2, 3, 4, 5);
+macro_rules! testbench {
+    ($basename:expr, $name:expr) => {
+        paste::paste! {
+            #[test]
+            fn [<testbench_ $basename _ $name>]() {
+                test_bench(concat!(stringify!($basename), "/", stringify!($name)));
+            }
+        }
+    };
+    ($basename:expr, $name:expr, $($tail:expr),+) => {
+        testbench!( $basename, $name );
+        testbench!( $basename, $($tail),+ );
+    }
+}
+
+//reftest!(gallery1, 1, 2, 3, 4, 5, photo001, photo002);
+testbench!(gallery1, 1, 2, 3, 4, 5, photo001, photo002);
