@@ -3,7 +3,7 @@ use std::io::{Cursor, Write};
 use std::path::PathBuf;
 
 // Write images to `out/` directory on test failure - useful for diffing with reference images.
-const WRITE_IMAGES_ON_FAILURE: bool = false;
+const WRITE_IMAGES_ON_FAILURE: bool = true;
 
 fn save_image(
     data: &[u8],
@@ -21,6 +21,8 @@ fn save_image(
         Some(i) => format!("tests/out/{file}-{i}.png"),
         None => format!("tests/out/{file}.png"),
     });
+
+    println!("Writing file: {path:?}");
 
     let directory = path.parent().unwrap();
     if !directory.exists() {
@@ -77,6 +79,7 @@ fn reference_test(file: &str) {
         .zip(reference_data.iter())
         .filter(|(a, b)| a != b)
         .count();
+    println!("saveing when {num_bytes_different} != 0");
     if num_bytes_different > 0 {
         save_image(&data, file, None, false, width, height);
     }

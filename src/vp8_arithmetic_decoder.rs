@@ -70,10 +70,11 @@ impl ArithmeticDecoder {
         }
     }
 
-    fn read_bit(&mut self, probability: u32) -> u8 {
+    //#[inline(never)]
+    fn read_bit(&mut self, probability: u32) -> bool {
         if self.state.bit_count < 0 {
             if !self.refill_bits() {
-                return 0u8;
+                return false;
             }
         }
 
@@ -92,23 +93,20 @@ impl ArithmeticDecoder {
         self.state.range <<= shift;
         self.state.bit_count -= shift as i32;
 
-        u8::from(value.is_some())
+        value.is_some()
     }
 
-    pub(crate) fn read_signed(&mut self, abs_value: i32) -> i32 {
+    //#[inline(never)]
+    pub(crate) fn read_flag(&mut self) -> bool {
         if self.state.bit_count < 0 {
             if !self.refill_bits() {
-                return 0;
+                return false;
             }
         }
 
-        let split = 1 + (((self.state.range - 1) * 128) >> 8);
-        //let split = 1 + ((self.state.range - 1) >> 1);
+        let split = 1 + ((self.state.range - 1) >> 1);
         let value_split = u64::from(split) << self.state.bit_count;
         let value = self.state.value.checked_sub(value_split);
-
-        // let mask = ((value_split as i64).wrapping_sub(self.state.value as i64) >> 63) as i32;
-        //self.state.value = ((self.state.value as i64 - value_split as i64) & mask) as u64;
 
         if let Some(value) = value {
             self.state.range -= split;
@@ -116,6 +114,44 @@ impl ArithmeticDecoder {
         } else {
             self.state.range = split;
         }
+
+        let shift = self.state.range.leading_zeros().saturating_sub(24);
+        self.state.range <<= shift;
+        self.state.bit_count -= shift as i32;
+
+        value.is_some()
+    }
+
+    //#[inline(never)]
+    pub(crate) fn read_signed(&mut self, abs_value: i32) -> i32 {
+        if self.state.bit_count < 0 {
+            if !self.refill_bits() {
+                return 0;
+            }
+        }
+
+        //let r = self.state.range;
+        //let v = self.state.value;
+
+        let split_32 = (self.state.range + 1) >> 1;
+        let split_64 = u64::from(split_32) << self.state.bit_count;
+        let value = self.state.value.checked_sub(split_64);
+        
+        //let mask_64 = u64::from(self.state.value >= split_64).wrapping_neg();
+        //let value_64 = self.state.value - (split_64 & mask_64);
+        //let range_32 = self.state.range;
+
+        if let Some(value) = value {
+            self.state.range -= split_32;
+            self.state.value = value;
+        } else {
+            self.state.range = split_32;
+        }
+        self.state.range <<= 1;
+        self.state.bit_count -= 1;
+
+        //assert_eq!(self.state.range, range_32, "range: m={mask_64}, r={r}, v={v}");
+        //assert_eq!(self.state.value, value_64, "value");
 
         //(abs_value ^ mask) - mask
         if value.is_some() {
@@ -126,15 +162,11 @@ impl ArithmeticDecoder {
     }
 
     pub(crate) fn read_bool(&mut self, probability: u8) -> bool {
-        self.read_bit(probability as u32) != 0
-    }
-
-    pub(crate) fn read_flag(&mut self) -> bool {
-        self.read_bit(128) != 0
+        self.read_bit(probability as u32)
     }
 
     pub(crate) fn read_literal(&mut self, n: u8) -> u8 {
-        (0..n).fold(0u8, |v, _| (v << 1) | self.read_bit(128))
+        (0..n).fold(0u8, |v, _| (v << 1) | u8::from(self.read_flag()))
     }
 
     pub(crate) fn read_optional_signed_value(&mut self, n: u8) -> i32 {
@@ -150,6 +182,7 @@ impl ArithmeticDecoder {
         self.read_with_tree_with_first_node(tree, tree[0])
     }
 
+    //#[inline(never)]
     pub(crate) fn read_with_tree_with_first_node(
         &mut self,
         tree: &[TreeNode],
@@ -161,7 +194,7 @@ impl ArithmeticDecoder {
         loop {
             let node = tree[index];
             let b = self.read_bit(node.prob as u32);
-            let t = if b != 0 { node.right } else { node.left };
+            let t = node.children[b as usize];
             let new_index = usize::from(t);
             if new_index < tree.len() {
                 index = new_index;

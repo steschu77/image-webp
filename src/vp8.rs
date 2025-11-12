@@ -24,16 +24,14 @@ use super::{loop_filter, transform};
 
 #[derive(Clone, Copy)]
 pub(crate) struct TreeNode {
-    pub left: u8,
-    pub right: u8,
+    pub children: [u8; 2],
     pub prob: Prob,
     pub index: u8,
 }
 
 impl TreeNode {
     const UNINIT: TreeNode = TreeNode {
-        left: 0,
-        right: 0,
+        children: [0; 2],
         prob: 0,
         index: 0,
     };
@@ -55,15 +53,14 @@ impl TreeNode {
 const fn tree_nodes_from<const N: usize, const M: usize>(
     tree: [i8; N],
     probs: [Prob; M],
-) -> [TreeNode; M] {
-    if N != 2 * M {
-        panic!("invalid tree with probs");
-    }
+) -> [TreeNode; M]
+{
+    assert!(N == 2 * M);
     let mut nodes = [TreeNode::UNINIT; M];
     let mut i = 0;
     while i < M {
-        nodes[i].left = TreeNode::prepare_branch(tree[2 * i]);
-        nodes[i].right = TreeNode::prepare_branch(tree[2 * i + 1]);
+        nodes[i].children[0] = TreeNode::prepare_branch(tree[2 * i]);
+        nodes[i].children[1] = TreeNode::prepare_branch(tree[2 * i + 1]);
         nodes[i].prob = probs[i];
         nodes[i].index = i as u8;
         i += 1;
@@ -757,9 +754,10 @@ impl<R: Read> Vp8Decoder<R> {
                 2
             };
 
-            if decoder.read_flag() {
-                abs_value = -abs_value;
-            }
+            abs_value = decoder.read_signed(abs_value);
+            //if decoder.read_flag() {
+            //    abs_value = -abs_value;
+            //}
 
             let zigzag = ZIGZAG[i] as usize;
             block[zigzag] = abs_value * i32::from(if zigzag > 0 { acq } else { dcq });
