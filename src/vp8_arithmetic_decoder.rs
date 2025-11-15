@@ -2,39 +2,6 @@ use crate::decoder::DecodingError;
 
 use super::vp8::TreeNode;
 
-#[must_use]
-#[repr(transparent)]
-pub(crate) struct BitResult<T> {
-    value_if_not_past_eof: T,
-}
-
-#[must_use]
-pub(crate) struct BitResultAccumulator;
-
-impl<T> BitResult<T> {
-    const fn ok(value: T) -> Self {
-        Self {
-            value_if_not_past_eof: value,
-        }
-    }
-
-    /// Instead of checking this result now, accumulate the burden of checking
-    /// into an accumulator. This accumulator must be checked in the end.
-    #[inline(always)]
-    pub(crate) fn or_accumulate(self, acc: &mut BitResultAccumulator) -> T {
-        let _ = acc;
-        self.value_if_not_past_eof
-    }
-}
-
-impl<T: Default> BitResult<T> {
-    fn err() -> Self {
-        Self {
-            value_if_not_past_eof: T::default(),
-        }
-    }
-}
-
 #[cfg_attr(test, derive(Debug))]
 pub(crate) struct ArithmeticDecoder {
     chunks: Box<[[u8; 4]]>,
@@ -110,56 +77,24 @@ impl ArithmeticDecoder {
         Ok(())
     }
 
-    /// Start a span of reading operations from the buffer, without stopping
-    /// when the buffer runs out. For all valid webp images, the buffer will not
-    /// run out prematurely. Conversely if the buffer ends early, the webp image
-    /// cannot be correctly decoded and any intermediate results need to be
-    /// discarded anyway.
-    ///
-    /// Each call to `start_accumulated_result` must be followed by a call to
-    /// `check` on the *same* `ArithmeticDecoder`.
-    #[inline(always)]
-    pub(crate) fn start_accumulated_result(&mut self) -> BitResultAccumulator {
-        BitResultAccumulator
-    }
-
     /// Check that the read operations done so far were all valid.
     #[inline(always)]
     pub(crate) fn check<T>(
         &self,
-        acc: BitResultAccumulator,
-        value_if_not_past_eof: T,
+        value: T,
     ) -> Result<T, DecodingError> {
-        // The accumulator does not store any state because doing so is
-        // too computationally expensive. Passing it around is a bit of
-        // formality (that is optimized out) to ensure we call `check` .
-        // Instead we check whether we have read past the end of the file.
-        let BitResultAccumulator = acc;
-
-        if self.is_past_eof() {
+        if self.final_bytes_remaining == Self::FINAL_BYTES_REMAINING_EOF {
             Err(DecodingError::BitStreamError)
         } else {
-            Ok(value_if_not_past_eof)
+            Ok(value)
         }
-    }
-
-    fn keep_accumulating<T>(
-        &self,
-        acc: BitResultAccumulator,
-        value_if_not_past_eof: T,
-    ) -> BitResult<T> {
-        // The BitResult will be checked later by a different accumulator.
-        // Because it does not carry state, that is fine.
-        let BitResultAccumulator = acc;
-
-        BitResult::ok(value_if_not_past_eof)
     }
 
     // Do not inline this because inlining seems to worsen performance.
     #[inline(never)]
-    pub(crate) fn read_bool(&mut self, probability: u8) -> BitResult<bool> {
+    pub(crate) fn read_bool(&mut self, probability: u8) -> bool {
         if let Some(b) = self.fast().read_bool(probability) {
-            return BitResult::ok(b);
+            return b;
         }
 
         self.cold_read_bool(probability)
@@ -167,9 +102,9 @@ impl ArithmeticDecoder {
 
     // Do not inline this because inlining seems to worsen performance.
     #[inline(never)]
-    pub(crate) fn read_flag(&mut self) -> BitResult<bool> {
+    pub(crate) fn read_flag(&mut self) -> bool {
         if let Some(b) = self.fast().read_flag() {
-            return BitResult::ok(b);
+            return b;
         }
 
         self.cold_read_flag()
@@ -177,9 +112,9 @@ impl ArithmeticDecoder {
 
     // Do not inline this because inlining seems to worsen performance.
     #[inline(never)]
-    pub(crate) fn read_sign(&mut self) -> BitResult<bool> {
+    pub(crate) fn read_sign(&mut self) -> bool {
         if let Some(b) = self.fast().read_sign() {
-            return BitResult::ok(b);
+            return b;
         }
 
         self.cold_read_flag()
@@ -187,9 +122,9 @@ impl ArithmeticDecoder {
 
     // Do not inline this because inlining seems to worsen performance.
     #[inline(never)]
-    pub(crate) fn read_literal(&mut self, n: u8) -> BitResult<u8> {
+    pub(crate) fn read_literal(&mut self, n: u8) -> u8 {
         if let Some(v) = self.fast().read_literal(n) {
-            return BitResult::ok(v);
+            return v;
         }
 
         self.cold_read_literal(n)
@@ -197,9 +132,9 @@ impl ArithmeticDecoder {
 
     // Do not inline this because inlining seems to worsen performance.
     #[inline(never)]
-    pub(crate) fn read_optional_signed_value(&mut self, n: u8) -> BitResult<i32> {
+    pub(crate) fn read_optional_signed_value(&mut self, n: u8) -> i32 {
         if let Some(v) = self.fast().read_optional_signed_value(n) {
-            return BitResult::ok(v);
+            return v;
         }
 
         self.cold_read_optional_signed_value(n)
@@ -207,7 +142,7 @@ impl ArithmeticDecoder {
 
     // This is generic and inlined just to skip the first bounds check.
     #[inline]
-    pub(crate) fn read_with_tree<const N: usize>(&mut self, tree: &[TreeNode; N]) -> BitResult<i8> {
+    pub(crate) fn read_with_tree<const N: usize>(&mut self, tree: &[TreeNode; N]) -> i8 {
         let first_node = tree[0];
         self.read_with_tree_with_first_node(tree, first_node)
     }
@@ -218,9 +153,9 @@ impl ArithmeticDecoder {
         &mut self,
         tree: &[TreeNode],
         first_node: TreeNode,
-    ) -> BitResult<i8> {
+    ) -> i8 {
         if let Some(v) = self.fast().read_with_tree(tree, first_node) {
-            return BitResult::ok(v);
+            return v;
         }
 
         self.cold_read_with_tree(tree, usize::from(first_node.index))
@@ -271,11 +206,7 @@ impl ArithmeticDecoder {
         }
     }
 
-    fn is_past_eof(&self) -> bool {
-        self.final_bytes_remaining == Self::FINAL_BYTES_REMAINING_EOF
-    }
-
-    fn cold_read_bit(&mut self, probability: u8) -> BitResult<bool> {
+    fn cold_read_bit(&mut self, probability: u8) -> bool {
         if self.state.bit_count < 0 {
             if let Some(chunk) = self.chunks.get(self.state.chunk_index).copied() {
                 let v = u32::from_be_bytes(chunk);
@@ -285,9 +216,6 @@ impl ArithmeticDecoder {
                 self.state.bit_count += 32;
             } else {
                 self.load_from_final_bytes();
-                if self.is_past_eof() {
-                    return BitResult::err();
-                }
             }
         }
         debug_assert!(self.state.bit_count >= 0);
@@ -316,72 +244,67 @@ impl ArithmeticDecoder {
         self.state.bit_count -= shift as i32;
         debug_assert!(self.state.range >= 128);
 
-        BitResult::ok(retval)
+        retval
     }
 
     #[cold]
     #[inline(never)]
-    fn cold_read_bool(&mut self, probability: u8) -> BitResult<bool> {
+    fn cold_read_bool(&mut self, probability: u8) -> bool {
         self.cold_read_bit(probability)
     }
 
     #[cold]
     #[inline(never)]
-    fn cold_read_flag(&mut self) -> BitResult<bool> {
+    fn cold_read_flag(&mut self) -> bool {
         self.cold_read_bit(128)
     }
 
     #[cold]
     #[inline(never)]
-    fn cold_read_literal(&mut self, n: u8) -> BitResult<u8> {
+    fn cold_read_literal(&mut self, n: u8) -> u8 {
         let mut v = 0u8;
-        let mut res = self.start_accumulated_result();
 
         for _ in 0..n {
-            let b = self.cold_read_flag().or_accumulate(&mut res);
+            let b = self.cold_read_flag();
             v = (v << 1) + u8::from(b);
         }
 
-        self.keep_accumulating(res, v)
+        v
     }
 
     #[cold]
     #[inline(never)]
-    fn cold_read_optional_signed_value(&mut self, n: u8) -> BitResult<i32> {
-        let mut res = self.start_accumulated_result();
-        let flag = self.cold_read_flag().or_accumulate(&mut res);
+    fn cold_read_optional_signed_value(&mut self, n: u8) -> i32 {
+        let flag = self.cold_read_flag();
         if !flag {
-            // We should not read further bits if the flag is not set.
-            return self.keep_accumulating(res, 0);
+            return 0;
         }
-        let magnitude = self.cold_read_literal(n).or_accumulate(&mut res);
-        let sign = self.cold_read_flag().or_accumulate(&mut res);
+        let magnitude = self.cold_read_literal(n);
+        let sign = self.cold_read_flag();
 
-        let value = if sign {
+        if sign {
             -i32::from(magnitude)
         } else {
             i32::from(magnitude)
-        };
-        self.keep_accumulating(res, value)
+        }
     }
 
     #[cold]
     #[inline(never)]
-    fn cold_read_with_tree(&mut self, tree: &[TreeNode], start: usize) -> BitResult<i8> {
+    fn cold_read_with_tree(&mut self, tree: &[TreeNode], start: usize) -> i8 {
         let mut index = start;
-        let mut res = self.start_accumulated_result();
 
         loop {
             let node = tree[index];
             let prob = node.prob;
-            let b = self.cold_read_bit(prob).or_accumulate(&mut res);
+            let b = self.cold_read_bit(prob);
             let t = if b { node.right } else { node.left };
             let new_index = usize::from(t);
             if new_index < tree.len() {
                 index = new_index;
             } else {
                 let value = TreeNode::value_from_branch(t);
-                return self.keep_accumulating(res, value);
+                return value;
             }
         }
     }
@@ -641,15 +564,13 @@ mod tests {
         let mut buf = vec![[0u8; 4]; 1];
         buf.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&data[..]);
         decoder.init(buf, size).unwrap();
-        let mut res = decoder.start_accumulated_result();
-        assert_eq!(false, decoder.read_flag().or_accumulate(&mut res));
-        assert_eq!(true, decoder.read_bool(10).or_accumulate(&mut res));
-        assert_eq!(false, decoder.read_bool(250).or_accumulate(&mut res));
-        assert_eq!(1, decoder.read_literal(1).or_accumulate(&mut res));
-        assert_eq!(5, decoder.read_literal(3).or_accumulate(&mut res));
-        assert_eq!(64, decoder.read_literal(8).or_accumulate(&mut res));
-        assert_eq!(185, decoder.read_literal(8).or_accumulate(&mut res));
-        decoder.check(res, ()).unwrap();
+        assert_eq!(false, decoder.read_flag());
+        assert_eq!(true, decoder.read_bool(10));
+        assert_eq!(false, decoder.read_bool(250));
+        assert_eq!(1, decoder.read_literal(1));
+        assert_eq!(5, decoder.read_literal(3));
+        assert_eq!(64, decoder.read_literal(8));
+        assert_eq!(185, decoder.read_literal(8));
     }
 
     #[test]
@@ -660,24 +581,22 @@ mod tests {
         let mut buf = vec![[0u8; 4]; (size + 3) / 4];
         buf.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&data[..]);
         decoder.init(buf, size).unwrap();
-        let mut res = decoder.start_accumulated_result();
-        assert_eq!(false, decoder.read_flag().or_accumulate(&mut res));
-        assert_eq!(true, decoder.read_bool(10).or_accumulate(&mut res));
-        assert_eq!(false, decoder.read_bool(250).or_accumulate(&mut res));
-        assert_eq!(1, decoder.read_literal(1).or_accumulate(&mut res));
-        assert_eq!(5, decoder.read_literal(3).or_accumulate(&mut res));
-        assert_eq!(64, decoder.read_literal(8).or_accumulate(&mut res));
-        assert_eq!(185, decoder.read_literal(8).or_accumulate(&mut res));
-        assert_eq!(31, decoder.read_literal(8).or_accumulate(&mut res));
-        decoder.check(res, ()).unwrap();
+        assert_eq!(false, decoder.read_flag());
+        assert_eq!(true, decoder.read_bool(10));
+        assert_eq!(false, decoder.read_bool(250));
+        assert_eq!(1, decoder.read_literal(1));
+        assert_eq!(5, decoder.read_literal(3));
+        assert_eq!(64, decoder.read_literal(8));
+        assert_eq!(185, decoder.read_literal(8));
+        assert_eq!(31, decoder.read_literal(8));
+        decoder.check(()).unwrap();
     }
 
     #[test]
     fn test_arithmetic_decoder_uninit() {
         let mut decoder = ArithmeticDecoder::new();
-        let mut res = decoder.start_accumulated_result();
-        let _ = decoder.read_flag().or_accumulate(&mut res);
-        let result = decoder.check(res, ());
+        let _ = decoder.read_flag();
+        let result = decoder.check(());
         assert!(result.is_err());
     }
 }

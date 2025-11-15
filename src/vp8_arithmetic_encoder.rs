@@ -222,13 +222,12 @@ mod tests {
         let mut decoder = ArithmeticDecoder::new();
         decoder.init(decode_buffer, write_buffer.len()).unwrap();
 
-        let mut res = decoder.start_accumulated_result();
-        assert_eq!(decoder.read_bool(40).or_accumulate(&mut res), true);
-        assert_eq!(decoder.read_bool(110).or_accumulate(&mut res), true);
-        assert_eq!(decoder.read_bool(70).or_accumulate(&mut res), false);
-        assert_eq!(decoder.read_bool(10).or_accumulate(&mut res), false);
-        assert_eq!(decoder.read_bool(5).or_accumulate(&mut res), true);
-        decoder.check(res, ()).unwrap();
+        assert_eq!(decoder.read_bool(40), true);
+        assert_eq!(decoder.read_bool(110), true);
+        assert_eq!(decoder.read_bool(70), false);
+        assert_eq!(decoder.read_bool(10), false);
+        assert_eq!(decoder.read_bool(5), true);
+        decoder.check(()).unwrap();
     }
 
     #[test]
