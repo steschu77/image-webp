@@ -373,7 +373,7 @@ impl<R: Read> Vp8Decoder<R> {
                 let mut buf = vec![[0; 4]; size.div_ceil(4)];
                 let bytes: &mut [u8] = buf.as_mut_slice().as_flattened_mut();
                 self.r.read_exact(&mut bytes[..size])?;
-                self.partitions[i].init(buf, size)?;
+                self.partitions[i].init(buf)?;
             }
         }
 
@@ -382,7 +382,7 @@ impl<R: Read> Vp8Decoder<R> {
         let size = buf.len();
         let mut chunks = vec![[0; 4]; size.div_ceil(4)];
         chunks.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&buf);
-        self.partitions[n - 1].init(chunks, size)?;
+        self.partitions[n - 1].init(chunks)?;
 
         Ok(())
     }
@@ -544,7 +544,7 @@ impl<R: Read> Vp8Decoder<R> {
         self.r.read_exact(&mut bytes[..size])?;
 
         // initialise binary decoder
-        self.b.init(buf, size)?;
+        self.b.init(buf)?;
 
         let color_space = self.b.read_literal(1);
         self.frame.pixel_type = self.b.read_literal(1);

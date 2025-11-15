@@ -169,7 +169,7 @@ mod tests {
     use super::*;
 
     fn convert_buffer_for_decoding(buffer: &[u8]) -> Vec<[u8; 4]> {
-        let mut new_buf = vec![[0u8; 4]; (buffer.len() + 3) / 4];
+        let mut new_buf = vec![[0u8; 4]; buffer.len().div_ceil(4)];
         new_buf.as_mut_slice().as_flattened_mut()[..buffer.len()].copy_from_slice(buffer);
         new_buf
     }
@@ -220,7 +220,7 @@ mod tests {
         let decode_buffer = convert_buffer_for_decoding(&write_buffer);
 
         let mut decoder = ArithmeticDecoder::new();
-        decoder.init(decode_buffer, write_buffer.len()).unwrap();
+        decoder.init(decode_buffer).unwrap();
 
         assert_eq!(decoder.read_bool(40), true);
         assert_eq!(decoder.read_bool(110), true);
