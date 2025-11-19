@@ -87,10 +87,10 @@ fn reference_test(file: &str) {
 }
 
 fn test_bench(file: &str) {
-    let start = std::time::Instant::now();
-
     // Prepare WebP decoder
     let contents = std::fs::read(format!("tests/images/{file}.webp")).unwrap();
+
+    let start = std::time::Instant::now();
     let mut decoder = image_webp::WebPDecoder::new(contents).unwrap();
     let (width, height) = decoder.dimensions();
 
