@@ -148,22 +148,16 @@ impl<'a> ArithmeticDecoder<'a> {
     pub(crate) fn read_with_tree_with_first_node(
         &mut self,
         tree: &[TreeNode],
-        first_node: TreeNode,
+        first: TreeNode,
     ) -> i8 {
-        let start = usize::from(first_node.index);
-        let mut index = start;
-
+        let mut node = first;
         loop {
-            let node = tree[index];
             let b = self.read_bit(node.prob as u32);
-            let t = node.children[b as usize];
-            let new_index = usize::from(t);
-            if new_index < tree.len() {
-                index = new_index;
-            } else {
-                let value = TreeNode::value_from_branch(t);
-                return value;
-            }
+            let i = node.children[usize::from(b)];
+            let Some(next_node) = tree.get(usize::from(i)) else {
+                return TreeNode::value_from_branch(i);
+            };
+            node = *next_node;
         }
     }
 }
