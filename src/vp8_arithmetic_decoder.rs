@@ -1,15 +1,13 @@
-use crate::decoder::Result;
-
 use super::vp8::TreeNode;
 
-#[cfg_attr(test, derive(Debug))]
-pub(crate) struct ArithmeticDecoder {
-    chunks: Vec<[u8; 4]>,
+pub(crate) struct ArithmeticDecoder<'a> {
+    chunks: &'a [[u8; 4]],
+    last_chunk: [u8; 4],
     chunk_index: usize,
+    chunk_count: usize,
     state: State,
 }
 
-#[cfg_attr(test, derive(Debug))]
 #[derive(Clone, Copy)]
 struct State {
     value: u64,
@@ -17,44 +15,34 @@ struct State {
     bit_count: i32,
 }
 
-impl ArithmeticDecoder {
-    pub(crate) fn new() -> ArithmeticDecoder {
+impl<'a> ArithmeticDecoder<'a> {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        let (chunks, last) = data.as_chunks::<4>();
+        let mut last_chunk = [0u8; 4];
+        last_chunk[..last.len()].copy_from_slice(last);
+        let chunk_count = data.len().div_ceil(4);
+        
         let state = State {
             value: 0,
             range: 255,
             bit_count: -8,
         };
-        ArithmeticDecoder {
-            chunks: Vec::new(),
+
+        Self {
+            chunks,
+            last_chunk,
             chunk_index: 0,
+            chunk_count,
             state,
         }
     }
 
-    pub(crate) fn init(&mut self, data: &[u8]) -> Result<()> {
-        let size = data.len();
-        let mut chunks = vec![[0; 4]; size.div_ceil(4)];
-        chunks.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&data);
-
-        let state = State {
-            value: 0,
-            range: 255,
-            bit_count: -8,
-        };
-        *self = Self {
-            chunks,
-            chunk_index: 0,
-            state,
-        };
-        Ok(())
-    }
-
     pub(crate) fn is_overflow(&self) -> bool {
-        self.chunk_index > self.chunks.len()
+        self.chunk_index > self.chunk_count
     }
 
     fn refill_bits(&mut self) {
-        let chunk = self.chunks.get(self.chunk_index).copied().unwrap_or_default();
+        let chunk = self.chunks.get(self.chunk_index).copied().unwrap_or(self.last_chunk);
         self.chunk_index += 1;
         self.state.value = (self.state.value << 32) | u64::from(u32::from_be_bytes(chunk));
         self.state.bit_count += 32;
@@ -186,9 +174,8 @@ mod tests {
 
     #[test]
     fn test_arithmetic_decoder_hello_short() {
-        let mut decoder = ArithmeticDecoder::new();
         let data = b"hel";
-        decoder.init(&data[..]).unwrap();
+        let mut decoder = ArithmeticDecoder::new(data);
         assert_eq!(false, decoder.read_flag());
         assert_eq!(true, decoder.read_bool(10));
         assert_eq!(false, decoder.read_bool(250));
@@ -201,9 +188,8 @@ mod tests {
 
     #[test]
     fn test_arithmetic_decoder_hello_long() {
-        let mut decoder = ArithmeticDecoder::new();
         let data = b"hello world";
-        decoder.init(&data[..]).unwrap();
+        let mut decoder = ArithmeticDecoder::new(data);
         assert_eq!(false, decoder.read_flag());
         assert_eq!(true, decoder.read_bool(10));
         assert_eq!(false, decoder.read_bool(250));
@@ -217,7 +203,8 @@ mod tests {
 
     #[test]
     fn test_arithmetic_decoder_uninit() {
-        let mut decoder = ArithmeticDecoder::new();
+        let data = b"";
+        let mut decoder = ArithmeticDecoder::new(data);
         let _ = decoder.read_flag();
         assert!(decoder.is_overflow());
     }

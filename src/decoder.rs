@@ -1,6 +1,6 @@
 // WEBP decompression API.
 use super::vp8::Vp8Decoder;
-use std::io::{self, Cursor};
+use std::io::{self};
 use std::ops::Range;
 
 #[derive(Debug)]
@@ -140,12 +140,8 @@ impl WebPDecoder {
             return Err(Error::ImageTooLarge);
         }
 
-        let r = Cursor::new(self.data.clone());
-        let decoder = Vp8Decoder::new(r);
-        let frame = decoder.decode_frame()?;
-        if usize::from(frame.width) != self.width || usize::from(frame.height) != self.height {
-            return Err(Error::InvalidImageSize);
-        }
+        let decoder = Vp8Decoder::new();
+        let frame = decoder.decode_frame(&self.data)?;
 
         frame.fill_rgb(buf);
 
