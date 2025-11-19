@@ -65,7 +65,8 @@ impl<'a> ArithmeticDecoder<'a> {
             self.state.range = split;
         }
 
-        let shift = self.state.range.leading_zeros().saturating_sub(24);
+        let range_8 = self.state.range as u8;
+        let shift = range_8.leading_zeros();
         self.state.range <<= shift;
         self.state.bit_count -= shift as i32;
 
@@ -89,7 +90,7 @@ impl<'a> ArithmeticDecoder<'a> {
             self.state.range = split;
         }
 
-        let shift = self.state.range.leading_zeros().saturating_sub(24);
+        let shift = if self.state.range == 0x80 { 0 } else { 1 };
         self.state.range <<= shift;
         self.state.bit_count -= shift as i32;
 
