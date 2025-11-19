@@ -14,7 +14,6 @@ use std::default::Default;
 use crate::decoder::{Error, Result};
 use crate::vp8_common::*;
 use crate::vp8_prediction::*;
-use crate::yuv;
 use super::vp8_arithmetic_decoder::ArithmeticDecoder;
 use super::{loop_filter, transform};
 
@@ -134,37 +133,6 @@ pub struct Frame {
     pub(crate) filter_level: u8,
     pub(crate) sharpness_level: u8,
     pub(crate) first_partition_size: usize,
-}
-
-impl Frame {
-    const fn buffer_width(&self) -> u16 {
-        let difference = self.width % 16;
-        if difference > 0 {
-            self.width + (16 - difference % 16)
-        } else {
-            self.width
-        }
-    }
-
-    /// Fills an rgb buffer from the YUV buffers
-    pub(crate) fn fill_rgb(&self, buf: &mut [u8]) {
-        const BPP: usize = 3;
-        yuv::fill_rgb_buffer_fancy::<BPP>(
-            buf,
-            &self.ybuf,
-            &self.ubuf,
-            &self.vbuf,
-            usize::from(self.width),
-            usize::from(self.height),
-            usize::from(self.buffer_width()),
-        );
-    }
-
-    /// Gets the buffer size
-    #[must_use]
-    pub fn get_buf_size(&self) -> usize {
-        self.ybuf.len() * 3
-    }
 }
 
 #[inline]
