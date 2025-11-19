@@ -5,14 +5,13 @@ use super::vp8::TreeNode;
 #[cfg_attr(test, derive(Debug))]
 pub(crate) struct ArithmeticDecoder {
     chunks: Vec<[u8; 4]>,
-    overflow: bool,
+    chunk_index: usize,
     state: State,
 }
 
 #[cfg_attr(test, derive(Debug))]
 #[derive(Clone, Copy)]
 struct State {
-    chunk_index: usize,
     value: u64,
     range: u32,
     bit_count: i32,
@@ -21,14 +20,13 @@ struct State {
 impl ArithmeticDecoder {
     pub(crate) fn new() -> ArithmeticDecoder {
         let state = State {
-            chunk_index: 0,
             value: 0,
             range: 255,
             bit_count: -8,
         };
         ArithmeticDecoder {
             chunks: Vec::new(),
-            overflow: false,
+            chunk_index: 0,
             state,
         }
     }
@@ -39,43 +37,33 @@ impl ArithmeticDecoder {
         chunks.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&data);
 
         let state = State {
-            chunk_index: 0,
             value: 0,
             range: 255,
             bit_count: -8,
         };
         *self = Self {
             chunks,
-            overflow: false,
+            chunk_index: 0,
             state,
         };
         Ok(())
     }
 
     pub(crate) fn is_overflow(&self) -> bool {
-        self.overflow
+        self.chunk_index > self.chunks.len()
     }
 
-    fn refill_bits(&mut self) -> bool {
-        if let Some(chunk) = self.chunks.get(self.state.chunk_index).copied() {
-            let v = u32::from_be_bytes(chunk);
-            self.state.chunk_index += 1;
-            self.state.value <<= 32;
-            self.state.value |= u64::from(v);
-            self.state.bit_count += 32;
-            true
-        } else {
-            self.overflow = true;
-            false
-        }
+    fn refill_bits(&mut self) {
+        let chunk = self.chunks.get(self.chunk_index).copied().unwrap_or_default();
+        self.chunk_index += 1;
+        self.state.value = (self.state.value << 32) | u64::from(u32::from_be_bytes(chunk));
+        self.state.bit_count += 32;
     }
 
     //#[inline(never)]
     fn read_bit(&mut self, probability: u32) -> bool {
         if self.state.bit_count < 0 {
-            if !self.refill_bits() {
-                return false;
-            }
+            self.refill_bits();
         }
 
         let split = 1 + (((self.state.range - 1) * probability) >> 8);
@@ -99,9 +87,7 @@ impl ArithmeticDecoder {
     //#[inline(never)]
     pub(crate) fn read_flag(&mut self) -> bool {
         if self.state.bit_count < 0 {
-            if !self.refill_bits() {
-                return false;
-            }
+            self.refill_bits();
         }
 
         let split = 1 + ((self.state.range - 1) >> 1);
@@ -125,21 +111,12 @@ impl ArithmeticDecoder {
     //#[inline(never)]
     pub(crate) fn read_signed(&mut self, abs_value: i32) -> i32 {
         if self.state.bit_count < 0 {
-            if !self.refill_bits() {
-                return 0;
-            }
+            self.refill_bits();
         }
-
-        //let r = self.state.range;
-        //let v = self.state.value;
 
         let split_32 = (self.state.range + 1) >> 1;
         let split_64 = u64::from(split_32) << self.state.bit_count;
         let value = self.state.value.checked_sub(split_64);
-        
-        //let mask_64 = u64::from(self.state.value >= split_64).wrapping_neg();
-        //let value_64 = self.state.value - (split_64 & mask_64);
-        //let range_32 = self.state.range;
 
         if let Some(value) = value {
             self.state.range -= split_32;
@@ -147,13 +124,10 @@ impl ArithmeticDecoder {
         } else {
             self.state.range = split_32;
         }
+
         self.state.range <<= 1;
         self.state.bit_count -= 1;
 
-        //assert_eq!(self.state.range, range_32, "range: m={mask_64}, r={r}, v={v}");
-        //assert_eq!(self.state.value, value_64, "value");
-
-        //(abs_value ^ mask) - mask
         if value.is_some() {
             -abs_value
         } else {
